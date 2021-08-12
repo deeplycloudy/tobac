@@ -47,7 +47,7 @@ def make_tracks(grid_ds, field, params=None):
         frame1 = frame2
         grid_obj1 = grid_obj2
         grid_obj2 = grid_ds.isel(time=i)
-        record.update_scan_and_time(grid_obj1, grid_obj2)        
+        record.update_scan_and_time(grid_obj1, grid_obj2)
         raw2, frame2 = extract_grid_data(
             grid_obj2, field, grid_size, params)
         if np.max(frame1) == 0:
@@ -81,6 +81,8 @@ def make_tracks(grid_ds, field, params=None):
     record.update_scan_and_time(grid_obj1)
     tracks = tracks.set_index(['cell'])
     tracks = tracks.to_xarray()
+    tracks = tracks.rename_vars({'latitude':'cell_ctr_lat',
+                                 'longitude':'cell_ctr_lon'})
     tracks["cell_time"] = tracks["time"]
     tracks = tracks.drop("time")
     tracks["time"] = grid_ds.time.astype('datetime64[s]')
@@ -89,12 +91,24 @@ def make_tracks(grid_ds, field, params=None):
     tracks["cell_id"] = tracks["cell"]
     tracks["cell_id"].attrs["parent"] = "storm_id"
     tracks["cell_id"].attrs["parent_id"] = "cell_parent_storm_id"
-    tracks["cell_parent_storm_id"] = grid_ds["storm_id"]
     tracks["cell_mask"] = cell_mask
     tracks["cell_mask"].attrs["cf_role"] = grid_ds.attrs["tree_id"]
     tracks["cell_mask"].attrs["long_name"] = "cell ID for this grid cell"
-    tracks["cell_mask"].attrs['coordinates'] = 'cell_id time latitude longitude'    
-    # Add hierarchy
+    tracks["cell_mask"].attrs['coordinates'] = 'cell_id time y x'
+
+    # Add hierarchy. Right now, all cells are naively assigned to the zeroth
+    # storm ID in the storm dimension, since we have no storm info.
+    dummy_cell_parents = np.zeros_like(tracks.cell_id) + grid_ds["storm_id"].data[0]
+    print(dummy_cell_parents.shape)
+    tracks["cell_parent_storm_id"] = xr.DataArray(dummy_cell_parents,
+        dims=tracks.cell_id.dims, coords=tracks.cell_id.coords)
+
+
+    # Copy over coordinate data, and fix swapped cell_mask coordinates.
+    tracks=tracks.swap_dims({'x':'y2', 'y':'x2'}).rename_dims({'x2':'x', 'y2':'y'})
+    tracks['x']=grid_ds['x']
+    tracks['y']=grid_ds['y']
+    tracks['z']=grid_ds['z']
 
     return tracks
 
@@ -122,10 +136,10 @@ def make_tracks_2d_field(grid_ds, field, params=None):
     times = grid_ds.Time.values
     grid_obj2 = grid_ds.isel(Time=0)
     raw2, frame2 = extract_grid_data_2d(grid_obj2, field, params)
-    
+
     record = Record(grid_ds)
     record.grid_size = np.array([1,
-        grid_obj2.attrs["DY"], 
+        grid_obj2.attrs["DY"],
         grid_obj2.attrs["DX"]])
     current_objects = None
     counter = Counter()
@@ -133,7 +147,7 @@ def make_tracks_2d_field(grid_ds, field, params=None):
     cell_mask = xr.DataArray(
         np.zeros((len(times), frame2.shape[0], frame2.shape[1])),
         dims=('Time', 'x', 'y'))
-    
+
     for i in range(1, len(times)):
         raw1 = raw2
         frame1 = frame2
